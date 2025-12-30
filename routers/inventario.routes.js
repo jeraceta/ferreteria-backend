@@ -102,14 +102,14 @@ router.post('/producto', requiereAuth, async (req, res) => {
 
 // --- 3. MOVIMIENTOS ---
 // Las compras solo pueden ser realizadas por gerentes
-router.post('/compra', esGerente, async (req, res) => {
-    // Note: kept as-is for backward compatibility; prefer /api/compras route for validated flow
+// Agregamos 'next' aquí vvv
+router.post('/compra', esGerente, async (req, res, next) => { 
     try {
         const { datosCompra, detalle } = req.body; 
         const resultado = await procesarNuevaCompra(datosCompra, detalle);
         res.status(201).json({ mensaje: 'Compra procesada', compraId: resultado.id_compra });
     } catch (error) {
-        next(error);
+        next(error); // Ahora sí funcionará porque ya está definido arriba
     }
 });
 

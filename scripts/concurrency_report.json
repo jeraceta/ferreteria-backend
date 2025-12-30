@@ -4,162 +4,30 @@
   "concurrency": 50,
   "quantity": 1,
   "totalRequests": 50,
-  "successCount": 0,
-  "failureCount": 50,
-  "successVentaIds": [],
+  "successCount": 19,
+  "failureCount": 31,
+  "successVentaIds": [
+    121,
+    115,
+    120,
+    116,
+    123,
+    122,
+    114,
+    118,
+    117,
+    119,
+    124,
+    126,
+    125,
+    128,
+    127,
+    129,
+    130,
+    132,
+    131
+  ],
   "failures": [
-    {
-      "index": 1,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 2,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 3,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 4,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 5,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 6,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 7,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 8,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 9,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 10,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 11,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 12,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 13,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 14,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 15,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 16,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 17,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 18,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
-    {
-      "index": 19,
-      "status": 400,
-      "body": {
-        "success": false,
-        "error": "Stock insuficiente para \"Martillo Galponero 20oz\". Disponible: 0, Solicitado: 1"
-      }
-    },
     {
       "index": 20,
       "status": 400,
