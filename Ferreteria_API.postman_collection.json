@@ -1,0 +1,417 @@
+{
+	"info": {
+		"_postman_id": "ferreteria-api-001",
+		"name": "Sistema Ferretería API",
+		"description": "Colección completa de endpoints para el Sistema de Gestión de Ferretería",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "🔐 Autenticación",
+			"item": [
+				{
+					"name": "Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    var jsonData = pm.response.json();",
+									"    if (jsonData.token) {",
+									"        pm.environment.set(\"auth_token\", jsonData.token);",
+									"        console.log(\"Token guardado: \" + jsonData.token);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"username\": \"admin\",\n    \"password\": \"admin123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/inventario/login",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"inventario",
+								"login"
+							]
+						},
+						"description": "Iniciar sesión en el sistema. El token se guarda automáticamente en la variable de entorno."
+					}
+				}
+			]
+		},
+		{
+			"name": "📦 Productos",
+			"item": [
+				{
+					"name": "Listar Productos",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/inventario/productos",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"inventario",
+								"productos"
+							]
+						},
+						"description": "Obtener todos los productos. No requiere autenticación."
+					}
+				},
+				{
+					"name": "Crear Producto",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{auth_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"codigo\": \"TEST-001\",\n    \"nombre\": \"Producto de Prueba\",\n    \"descripcion\": \"Descripción del producto\",\n    \"stock\": 100,\n    \"precio_venta\": 25.50,\n    \"precio_costo\": 15.00\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/inventario/producto",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"inventario",
+								"producto"
+							]
+						},
+						"description": "Crear un nuevo producto. Requiere autenticación."
+					}
+				},
+				{
+					"name": "Ver Kardex (Historial)",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{auth_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/inventario/kardex/:id_producto",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"inventario",
+								"kardex",
+								":id_producto"
+							],
+							"variable": [
+								{
+									"key": "id_producto",
+									"value": "1",
+									"description": "ID del producto"
+								}
+							]
+						},
+						"description": "Obtener el historial completo de movimientos (Kardex) de un producto específico."
+					}
+				}
+			]
+		},
+		{
+			"name": "👥 Clientes",
+			"item": [
+				{
+					"name": "Listar Clientes",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{auth_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/clientes",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"clientes"
+							]
+						}
+					}
+				},
+				{
+					"name": "Crear Cliente",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{auth_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"tipo_documento\": \"V\",\n    \"rif_cedula\": \"V-12345678\",\n    \"razon_social\": \"Cliente de Prueba\",\n    \"direccion_fiscal\": \"Calle Principal #123\",\n    \"telefono\": \"0412-1234567\",\n    \"email\": \"cliente@email.com\",\n    \"tipo_contribuyente\": \"ORDINARIO\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/clientes",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"clientes"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "💰 Ventas",
+			"item": [
+				{
+					"name": "Procesar Venta (Facturar)",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{auth_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"datosVenta\": {\n        \"id_cliente\": 1,\n        \"numero_factura\": \"FAC-001\",\n        \"total_neto\": 100.00,\n        \"porcentaje_descuento\": 5.00,\n        \"monto_descuento\": 5.00,\n        \"total_antes_impuesto\": 95.00,\n        \"impuestos\": 16.15,\n        \"total_bruto\": 111.15,\n        \"metodo_pago\": \"efectivo\",\n        \"permitirStockNegativo\": false\n    },\n    \"detalle\": [\n        {\n            \"id_producto\": 1,\n            \"cantidad\": 2,\n            \"precio_unitario\": 50.00,\n            \"subtotal\": 100.00\n        }\n    ]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/ventas/facturar",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"ventas",
+								"facturar"
+							]
+						},
+						"description": "Procesar una venta. Puedes usar 'permitirStockNegativo: true' para permitir ventas con stock negativo."
+					}
+				}
+			]
+		},
+		{
+			"name": "🛒 Compras",
+			"item": [
+				{
+					"name": "Registrar Compra",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{auth_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"datosCompra\": {\n        \"id_proveedor\": 1,\n        \"numero_factura_proveedor\": \"FAC-PROV-001\",\n        \"total_neto\": 200.00,\n        \"porcentaje_descuento\": 0.00,\n        \"monto_descuento\": 0.00,\n        \"costo_antes_impuesto\": 200.00,\n        \"impuestos_compra\": 34.00,\n        \"total_bruto\": 234.00,\n        \"metodo_pago\": \"transferencia\"\n    },\n    \"detalle\": [\n        {\n            \"id_producto\": 1,\n            \"cantidad\": 10,\n            \"costo_unitario\": 20.00,\n            \"subtotal\": 200.00\n        }\n    ]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/compras/comprar",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"compras",
+								"comprar"
+							]
+						},
+						"description": "Registrar una compra. Requiere rol de GERENTE. El precio_costo se actualiza automáticamente."
+					}
+				}
+			]
+		},
+		{
+			"name": "📊 Reportes",
+			"item": [
+				{
+					"name": "Stock Crítico",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{auth_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/inventario/stock-critico",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"inventario",
+								"stock-critico"
+							]
+						}
+					}
+				},
+				{
+					"name": "Reporte de Ganancias",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{auth_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/inventario/reporte-ganancias",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"inventario",
+								"reporte-ganancias"
+							]
+						},
+						"description": "Requiere rol de GERENTE"
+					}
+				},
+				{
+					"name": "Top Productos Vendidos",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{auth_token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/inventario/reporte-top-productos",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"inventario",
+								"reporte-top-productos"
+							]
+						},
+						"description": "Requiere rol de GERENTE"
+					}
+				}
+			]
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:3000",
+			"type": "string"
+		},
+		{
+			"key": "auth_token",
+			"value": "",
+			"type": "string"
+		}
+	]
+}
+
