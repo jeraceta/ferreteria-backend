@@ -1,46 +1,51 @@
-# Ferreteria - Backend
 
-Pequeña guía para desarrollo local.
+# 🛠️ Ferretería API - Backend Gestión de Inventario
 
-Requisitos
-- Node.js (v16+ recommended)
+Guía técnica para la configuración, desarrollo y despliegue local del servidor.
 
-Instalación
-```bash
-npm install
-```
+## 📋 Requisitos
+- **Node.js**: v16 o superior (recomendado).
+- **MySQL**: v8.0 o superior.
 
-Variables de entorno
-- Copia el ejemplo y completa valores reales (NO commitear `.env`):
+## ⚙️ Instalación y Configuración
 
-Linux / macOS:
-```bash
-cp .env.example .env
-```
-
-Windows PowerShell:
-```powershell
+1. **Instalar dependencias:**
+   ```bash
+   npm install
+   Configurar variables de entorno: Crea el archivo .env basándote en el ejemplo. IMPORTANTE: No compartas ni subas este archivo al repositorio.
 Copy-Item .env.example .env
-```
 
-Rellena en `.env` `DB_PASSWORD` y `JWT_SECRET` (usar un secreto fuerte).
-
-Scripts útiles
-- Desarrollo (auto-reload):
-```bash
-npm run dev
-```
-- Producción / iniciar:
-```bash
-npm start
-```
-
-Pruebas manuales
-- Hay scripts ad-hoc: `test_api_simple.js`, `test_transacciones.js` — ejecutarlos con:
-```bash
+Completar datos en .env: Asegúrate de configurar DB_PASSWORD y un JWT_SECRET robusto para la seguridad de los tokens.
+Comando,Descripción
+npm run dev,Inicia el servidor con Nodemon (auto-reload al guardar cambios).
+npm start,Inicia el servidor en modo producción.
+🧪 Pruebas y Diagnóstico
+Si has realizado cambios en la base de datos o en la lógica de transacciones (como el Kardex), puedes ejecutar los scripts de prueba manuales incluidos:
+# Prueba básica de conexión y endpoints
 node test_api_simple.js
-```
 
-Notas de seguridad
-- No guardar `.env` en el repositorio.
-- Asegurar `JWT_SECRET` y credenciales de BD en el entorno de producción.
+# Prueba de integridad en ventas y stock
+node test_transacciones.js
+
+🛣️ Estructura de la API (Endpoints principales)
+Auth: POST /api/inventario/login
+
+Productos: GET/POST/PUT/DELETE /api/inventario/producto
+
+Kardex: GET /api/inventario/kardex/:id
+
+Reportes Gerenciales:
+
+/api/inventario/reporte-valoracion
+
+/api/inventario/reporte-ganancias
+
+🛡️ Notas de Seguridad
+El archivo .env está excluido por .gitignore para proteger credenciales.
+
+Las rutas sensibles requieren el middleware esGerente (validación de rol en JWT).
+
+Todas las operaciones críticas de stock utilizan Transacciones SQL para evitar inconsistencias.
+
+Mantenimiento y desarrollo v1.0 - 2025
+

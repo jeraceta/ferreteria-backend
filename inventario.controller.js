@@ -36,26 +36,41 @@ async function obtenerTodosLosProductos() {
     }
 }
 
-// 3. CREAR PRODUCTO
 async function crearProducto(datos) {
     let connection;
     try {
         connection = await pool.getConnection();
         await connection.beginTransaction();
 
+        // 1. VALIDACIÓN: Verificar si el código ya existe
+        const [existe] = await connection.execute(
+            'SELECT id FROM productos WHERE codigo = ?', 
+            [datos.codigo]
+        );
+
+        if (existe.length > 0) {
+            // Si el código existe, lanzamos error y el catch hará el rollback
+            const err = new Error(`El código ${datos.codigo} ya está registrado.`);
+            err.status = 400; 
+            throw err;
+        }
+
+        // 2. INSERTAR CABECERA: Crear el producto
         const [resProd] = await connection.execute(
             `INSERT INTO productos (codigo, nombre, precio_venta, precio_costo) VALUES (?, ?, ?, ?)`,
             [datos.codigo, datos.nombre, datos.precio_venta || 0, datos.precio_costo || 0]
         );
         const nuevoId = resProd.insertId;
 
+        // 3. INSERTAR STOCK: Inicializar los 3 depósitos para este nuevo producto
         const sqlStock = `INSERT INTO stock_depositos (id_producto, id_deposito, cantidad) VALUES (?, ?, ?)`;
-        await connection.execute(sqlStock, [nuevoId, 1, datos.stock || 0]);
-        await connection.execute(sqlStock, [nuevoId, 2, 0]);
-        await connection.execute(sqlStock, [nuevoId, 3, 0]);
+        await connection.execute(sqlStock, [nuevoId, 1, datos.stock || 0]); // Principal
+        await connection.execute(sqlStock, [nuevoId, 2, 0]);               // Dañado
+        await connection.execute(sqlStock, [nuevoId, 3, 0]);               // Inmovilizado
 
         await connection.commit();
         return { id: nuevoId, ...datos };
+
     } catch (error) {
         if (connection) await connection.rollback();
         throw error;
@@ -71,24 +86,33 @@ async function procesarNuevaVenta(datosVenta, detallesProductos) {
         connection = await pool.getConnection();
         await connection.beginTransaction();
         
+        // 🔒 BLOQUEO DE SEGURIDAD: Verificar si ya se hizo el Cierre Z hoy
+        const [cierreHoy] = await connection.execute(
+            `SELECT id FROM cierres_diarios WHERE DATE(fecha_cierre) = CURDATE() LIMIT 1`
+        );
+
+        if (cierreHoy.length > 0) {
+            const err = new Error("No se pueden registrar ventas: Ya se generó el Cierre Z de hoy.");
+            err.status = 403; // Forbidden
+            throw err;
+        }
+
         const dv = datosVenta || {}; 
         const items = detallesProductos || [];
         
-        // Configuración: permitir stock negativo (por defecto: false)
-        // Puedes cambiar esto según la política de tu ferretería
         const permitirStockNegativo = dv.permitirStockNegativo || false;
 
-        // 🔍 NUEVA VALIDACIÓN: Verificar que el usuario/vendedor existe
+        // 🔍 VALIDACIÓN: Vendedor
         const [usuarioExiste] = await connection.execute(
             'SELECT id FROM usuarios WHERE id = ?',
             [dv.usuarioId || 1]
         );
 
         if (usuarioExiste.length === 0) {
-            throw new Error(`El vendedor con ID ${dv.usuarioId || 1} no existe en el sistema.`);
+            throw new Error(`El vendedor con ID ${dv.usuarioId || 1} no existe.`);
         }
 
-        // 🔍 Validar que el cliente existe
+        // 🔍 VALIDACIÓN: Cliente
         const [clienteExiste] = await connection.execute(
             'SELECT id FROM clientes WHERE id = ?',
             [dv.clienteId || 1]
@@ -100,16 +124,16 @@ async function procesarNuevaVenta(datosVenta, detallesProductos) {
             throw err;
         }
 
-        // Registrar la cabecera de la venta
+        // Registrar la cabecera de la venta (nace como PENDIENTE por el DEFAULT de la DB)
         const [ventaResult] = await connection.execute(
-            `INSERT INTO ventas (id_cliente, id_usuario, subtotal, impuesto, total, tasa_bcv) 
-             VALUES (?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO ventas (id_cliente, id_usuario, subtotal, impuesto, total, tasa_bcv, estado_cierre) 
+             VALUES (?, ?, ?, ?, ?, ?, 'PENDIENTE')`,
             [dv.clienteId || 1, dv.usuarioId || 1, dv.subtotal || 0, dv.impuesto || 0, dv.total || 0, dv.tasaBcv || 0]
         );
         const id_venta = ventaResult.insertId; 
 
         for (const detalle of items) {
-            // 🔍 VALIDACIÓN DE STOCK MEJORADA
+            // 🔍 VALIDACIÓN DE STOCK + BLOQUEO DE FILA
             const [stockActual] = await connection.execute(
                 'SELECT cantidad FROM stock_depositos WHERE id_producto = ? AND id_deposito = 1 FOR UPDATE',
                 [detalle.productoId]
@@ -117,32 +141,26 @@ async function procesarNuevaVenta(datosVenta, detallesProductos) {
 
             const stockDisponible = stockActual[0]?.cantidad || 0;
             
-            // Validar stock solo si NO se permite stock negativo
             if (!permitirStockNegativo && stockDisponible < detalle.cantidad) {
-                // Obtener nombre del producto para mensaje de error más claro
                 const [producto] = await connection.execute(
                     'SELECT nombre FROM productos WHERE id = ?',
                     [detalle.productoId]
                 );
                 const nombreProducto = producto[0]?.nombre || `ID ${detalle.productoId}`;
-                const err = new Error(
-                    `Stock insuficiente para "${nombreProducto}". ` +
-                    `Disponible: ${stockDisponible}, Solicitado: ${detalle.cantidad}`
-                );
+                const err = new Error(`Stock insuficiente para "${nombreProducto}".`);
                 err.status = 400;
                 throw err;
             }
 
-            // Insertar detalle de venta
+            // Insertar detalle
             await connection.execute(
                 `INSERT INTO detalle_ventas (id_venta, id_producto, cantidad, precio_unitario) VALUES (?, ?, ?, ?)`,
                 [id_venta, detalle.productoId, detalle.cantidad, detalle.precioUnitario]
             );
 
-            // Registrar movimiento de inventario
+            // Registrar movimiento
             const comentarioMovimiento = permitirStockNegativo && stockDisponible < detalle.cantidad 
-                ? `Venta #${id_venta} (Stock negativo permitido)` 
-                : `Venta #${id_venta}`;
+                ? `Venta #${id_venta} (Stock negativo)` : `Venta #${id_venta}`;
             
             await connection.execute(
                 `INSERT INTO movimientos_inventario (id_producto, id_deposito, tipo_movimiento, cantidad, referencia_id, referencia_tabla, comentario)
@@ -150,7 +168,7 @@ async function procesarNuevaVenta(datosVenta, detallesProductos) {
                 [detalle.productoId, (detalle.cantidad * -1), id_venta, comentarioMovimiento] 
             );
 
-            // Actualizar stock real (puede quedar negativo si está permitido)
+            // Actualizar stock
             await connection.execute(
                 `UPDATE stock_depositos SET cantidad = cantidad - ? WHERE id_producto = ? AND id_deposito = 1`,
                 [detalle.cantidad, detalle.productoId]
@@ -176,6 +194,21 @@ async function obtenerStockCritico() {
         JOIN stock_depositos sd ON p.id = sd.id_producto
         WHERE sd.id_deposito = 1 AND sd.cantidad <= 5
         ORDER BY sd.cantidad ASC
+    `);
+    return rows;
+}
+
+async function obtenerInventarioCritico() {
+    const [rows] = await pool.execute(`
+        SELECT 
+            p.codigo,
+            p.nombre,
+            sd.cantidad AS stock_actual,
+            p.stock_minimo
+        FROM productos p
+        JOIN stock_depositos sd ON p.id = sd.id_producto
+        WHERE sd.id_deposito = 1 AND sd.cantidad <= p.stock_minimo
+        ORDER BY stock_actual ASC
     `);
     return rows;
 }
@@ -238,32 +271,100 @@ async function procesarNuevaCompra(datosCompra, detallesProductos) {
     }
 }
 
-// 7. GANANCIAS DEL DÍA
-async function obtenerGananciasHoy() {
-    const [rows] = await pool.execute(`
+// 7. GANANCIAS DE LA TIENDA
+async function obtenerGananciasTienda(fechaInicio, fechaFin) {
+    let query = `
         SELECT COUNT(DISTINCT v.id) as total_ventas,
         IFNULL(SUM(dv.cantidad * dv.precio_unitario), 0) as ingresos_totales,
         IFNULL(SUM(dv.cantidad * p.precio_costo), 0) as costo_mercancia,
         IFNULL((SUM(dv.cantidad * dv.precio_unitario) - SUM(dv.cantidad * p.precio_costo)), 0) as utilidad_neta
         FROM ventas v
         JOIN detalle_ventas dv ON v.id = dv.id_venta
-        JOIN productos p ON dv.id_producto = p.id
-        WHERE DATE(v.fecha_venta) = CURDATE()
-    `);
+        JOIN productos p ON dv.id_producto = p.id`;
+
+    const whereConditions = [];
+    const params = [];
+
+    if (fechaInicio && fechaFin) {
+        whereConditions.push(`DATE(v.fecha_venta) BETWEEN ? AND ?`);
+        params.push(fechaInicio, fechaFin);
+    } else if (fechaInicio) {
+        whereConditions.push(`DATE(v.fecha_venta) >= ?`);
+        params.push(fechaInicio);
+    } else if (fechaFin) {
+        whereConditions.push(`DATE(v.fecha_venta) <= ?`);
+        params.push(fechaFin);
+    }
+
+    if (whereConditions.length > 0) {
+        query += ` WHERE ${whereConditions.join(' AND ')}`;
+    }
+
+    const [rows] = await pool.execute(query, params);
     return rows[0];
 }
 
 // 8. VENTAS POR VENDEDOR (COMISIONES)
-async function obtenerVentasPorVendedor(fechaInicio, fechaFin) {
-    const [rows] = await pool.execute(`
-        SELECT u.id as usuario_id, u.nombre as vendedor,
-        COUNT(v.id) as cantidad_ventas,
-        IFNULL(SUM(v.total), 0) as total_ventas_brutas
+async function obtenerVentasPorVendedor(fechaInicio, fechaFin, porcentajeComision = 5) {
+    // Asegurarse que el valor es un número, si no, usar el default.
+    const comisionValue = parseFloat(porcentajeComision) || 5;
+    const params = [comisionValue]; // El primer parámetro siempre es la comisión
+
+    let query = `
+        SELECT 
+            u.id as usuario_id, 
+            u.nombre as vendedor,
+            COUNT(v.id) as cantidad_ventas,
+            IFNULL(SUM(v.total), 0) as total_ventas_brutas,
+            (IFNULL(SUM(v.total), 0) * ? / 100) as comision
         FROM usuarios u
-        LEFT JOIN ventas v ON u.id = v.id_usuario 
-            AND DATE(v.fecha_venta) BETWEEN ? AND ?
-        GROUP BY u.id
-    `, [fechaInicio, fechaFin]);
+        LEFT JOIN ventas v ON u.id = v.id_usuario`;
+
+    if (fechaInicio && fechaFin) {
+        query += ` AND DATE(v.fecha_venta) BETWEEN ? AND ?`;
+        params.push(fechaInicio, fechaFin); // Los siguientes son las fechas
+    }
+
+    query += ` 
+        GROUP BY u.id, u.nombre
+        ORDER BY total_ventas_brutas DESC`;
+
+    const [rows] = await pool.execute(query, params);
+    return rows;
+}
+
+async function obtenerVentasPorMetodoPago(fechaInicio, fechaFin) {
+    const params = [];
+    let query = `
+        SELECT
+            metodo_pago,
+            COUNT(id) AS cantidad_transacciones,
+            IFNULL(SUM(total), 0) AS monto_total
+        FROM ventas
+    `;
+
+    const whereConditions = [];
+    if (fechaInicio && fechaFin) {
+        whereConditions.push(`DATE(fecha_venta) BETWEEN ? AND ?`);
+        params.push(fechaInicio, fechaFin);
+    } else if (fechaInicio) {
+        whereConditions.push(`DATE(fecha_venta) >= ?`);
+        params.push(fechaInicio);
+    } else if (fechaFin) {
+        whereConditions.push(`DATE(fecha_venta) <= ?`);
+        params.push(fechaFin);
+    }
+
+    if (whereConditions.length > 0) {
+        query += ` WHERE ${whereConditions.join(' AND ')}`;
+    }
+
+    query += `
+        GROUP BY metodo_pago
+        ORDER BY monto_total DESC
+    `;
+
+    const [rows] = await pool.execute(query, params);
     return rows;
 }
 async function registrarUsuario(datos) {
@@ -308,51 +409,88 @@ async function obtenerLoMasVendido() {
     const [rows] = await pool.execute(`
         SELECT 
             p.nombre AS producto,
-            SUM(dv.cantidad) AS unidades_vendidas,
-            SUM(dv.cantidad * dv.precio_unitario) AS total_recaudado
-        FROM detalle_ventas dv
-        JOIN productos p ON dv.id_producto = p.id
+            (SELECT SUM(dv.cantidad) FROM detalle_ventas dv WHERE dv.id_producto = p.id) AS unidades_vendidas,
+            (SELECT SUM(dv.cantidad * dv.precio_unitario) FROM detalle_ventas dv WHERE dv.id_producto = p.id) AS total_recaudado
+        FROM productos p
         GROUP BY p.id
-        ORDER BY total_recaudado DESC -- <--- Ahora ordenamos por DINERO
+        ORDER BY total_recaudado DESC
         LIMIT 5
     `);
     return rows;
 }
+
+// OBTENER TOP 10 PRODUCTOS MÁS VENDIDOS POR RANGO DE FECHA
+async function obtenerProductosMasVendidos(fechaInicio, fechaFin) {
+    const params = [];
+    let query = `
+        SELECT
+            p.nombre AS producto,
+            p.codigo,
+            SUM(dv.cantidad) AS cantidad_vendida,
+            SUM(dv.cantidad * dv.precio_unitario) AS total_generado
+        FROM detalle_ventas dv
+        JOIN productos p ON dv.id_producto = p.id
+        JOIN ventas v ON dv.id_venta = v.id
+    `;
+
+    const whereConditions = [];
+    if (fechaInicio && fechaFin) {
+        whereConditions.push(`DATE(v.fecha_venta) BETWEEN ? AND ?`);
+        params.push(fechaInicio, fechaFin);
+    } else if (fechaInicio) {
+        whereConditions.push(`DATE(v.fecha_venta) >= ?`);
+        params.push(fechaInicio);
+    } else if (fechaFin) {
+        whereConditions.push(`DATE(v.fecha_venta) <= ?`);
+        params.push(fechaFin);
+    }
+
+    if (whereConditions.length > 0) {
+        query += ` WHERE ${whereConditions.join(' AND ')}`;
+    }
+
+    query += `
+        GROUP BY p.id, p.nombre, p.codigo
+        ORDER BY cantidad_vendida DESC
+        LIMIT 10
+    `;
+
+    const [rows] = await pool.execute(query, params);
+    return rows;
+}
 // FUNCIÓN DE LOGIN
 async function loginUsuario(username, password) {
-    // 1. Buscamos al usuario por su username
     const [rows] = await pool.execute(
-        'SELECT * FROM usuarios WHERE username = ?',
+        `SELECT id, username, password, nombre, rol FROM usuarios WHERE username = ?`,
         [username]
     );
 
     if (rows.length === 0) {
-        throw new Error("Usuario no encontrado.");
+        // Throwing an error is better for the route handler's try...catch block
+        const err = new Error('Usuario no encontrado');
+        err.status = 404;
+        throw err;
     }
 
     const usuario = rows[0];
 
-    // 2. Comparamos la contraseña enviada con el hash de la DB
-    const esValida = await bcrypt.compare(password, usuario.password);
+    // Verificar la contraseña
+    const passwordMatch = await bcrypt.compare(password, usuario.password);
 
-    if (!esValida) {
-        throw new Error("Contraseña incorrecta.");
+    if (!passwordMatch) {
+        const err = new Error('Credenciales inválidas');
+        err.status = 401;
+        throw err;
     }
 
-    // 3. Si todo está bien, retornamos los datos básicos del usuario
-    // (No devolvemos la contraseña por seguridad)
-    return {
-        id: usuario.id,
-        username: usuario.username,
-        nombre: usuario.nombre,
-        rol: usuario.rol
-    };
+    // Return only non-sensitive data
+    const { password: pw, ...user } = usuario;
+    return user;
 }
 // 8. OBTENER KARDEX (Historial de movimientos de un producto)
 async function obtenerKardexProducto(idProducto) {
     const connection = await pool.getConnection();
     try {
-        // Obtener información del producto
         const [producto] = await connection.execute(
             `SELECT id, codigo, nombre, precio_venta, precio_costo 
              FROM productos WHERE id = ?`,
@@ -360,16 +498,16 @@ async function obtenerKardexProducto(idProducto) {
         );
 
         if (producto.length === 0) {
-            throw new Error(`Producto con ID ${idProducto} no encontrado.`);
+            throw new Error('Producto no encontrado');
         }
 
-        // Obtener stock actual
+        await connection.beginTransaction();
+
         const [stockActual] = await connection.execute(
             `SELECT cantidad FROM stock_depositos WHERE id_producto = ? AND id_deposito = 1`,
             [idProducto]
         );
 
-        // Obtener todos los movimientos del producto ordenados por fecha
         const [movimientos] = await connection.execute(
             `SELECT 
                 m.id,
@@ -393,42 +531,37 @@ async function obtenerKardexProducto(idProducto) {
                     ELSE m.comentario
                 END as descripcion,
                 CASE 
-                    WHEN m.tipo_movimiento = 'COMPRA' OR m.tipo_movimiento = 'AJUSTE_ENTRADA' THEN 'ENTRADA'
-                    WHEN m.tipo_movimiento = 'VENTA' OR m.tipo_movimiento = 'AJUSTE_SALIDA' THEN 'SALIDA'
+                    WHEN m.tipo_movimiento IN ('COMPRA', 'AJUSTE_ENTRADA', 'DEVOLUCION_CLIENTE') THEN 'ENTRADA'
+                    WHEN m.tipo_movimiento IN ('VENTA', 'AJUSTE_SALIDA', 'DEVOLUCION_PROVEEDOR') THEN 'SALIDA'
+                    ELSE 'AJUSTE'
                 END as tipo_operacion
             FROM movimientos_inventario m
             WHERE m.id_producto = ?
-            ORDER BY m.fecha_movimiento DESC`,
+            ORDER BY m.fecha_movimiento ASC`,
             [idProducto]
         );
 
-        // Calcular stock acumulado (Kardex)
-        // Empezamos desde el stock actual y vamos hacia atrás en el tiempo
-        let stockAcumulado = stockActual[0]?.cantidad || 0;
+        let stockAcumulado = 0;
         const movimientosConStock = movimientos.map(mov => {
-            // La cantidad en movimientos_inventario ya es positiva para entradas y negativa para salidas
-            // Entonces para calcular el stock antes del movimiento, hacemos la operación inversa
-            if (mov.cantidad > 0) {
-                // Fue una entrada, entonces antes había menos
-                stockAcumulado -= mov.cantidad;
-            } else {
-                // Fue una salida, entonces antes había más
-                stockAcumulado += Math.abs(mov.cantidad);
-            }
+            const stockAntes = stockAcumulado;
+            stockAcumulado += parseFloat(mov.cantidad);
             return {
                 ...mov,
-                stock_antes: stockAcumulado,
-                stock_despues: stockAcumulado + (mov.cantidad > 0 ? mov.cantidad : mov.cantidad)
+                stock_antes: stockAntes,
+                stock_despues: stockAcumulado
             };
-        }).reverse(); // Invertir para mostrar cronológicamente (más antiguo primero)
+        });
+
+        await connection.commit();
 
         return {
             producto: producto[0],
             stock_actual: stockActual[0]?.cantidad || 0,
             total_movimientos: movimientos.length,
-            movimientos: movimientosConStock
+            movimientos: movimientosConStock.reverse()
         };
     } catch (error) {
+        await connection.rollback();
         throw error;
     } finally {
         connection.release();
@@ -436,122 +569,344 @@ async function obtenerKardexProducto(idProducto) {
 }
 
 // FUNCIONES DE APOYO RESTANTES
-async function procesarDevolucion(datosDevolucion) { /* ... */ }
-async function obtenerStockPorDepositos() { /* ... */ }
-async function actualizarProducto(id, datos) { /* ... */ }
-async function procesarAjusteInventario(datosAjuste) {
+
+async function procesarAjusteInventario(datos) {
+    const { id_producto, id_deposito, cantidad_nueva, motivo, tipo_ajuste } = datos;
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        // 1. Obtener cantidad anterior
+        const [actual] = await connection.execute(
+            'SELECT cantidad FROM stock_depositos WHERE id_producto = ? AND id_deposito = ?',
+            [id_producto, id_deposito]
+        );
+        const cantidadAnterior = actual[0]?.cantidad || 0;
+        const diferencia = tipo_ajuste === 'ENTRADA' ? cantidad_nueva : (cantidad_nueva * -1);
+
+        // 2. Actualizar stock
+        await connection.execute(
+            'UPDATE stock_depositos SET cantidad = cantidad + ? WHERE id_producto = ? AND id_deposito = ?',
+            [diferencia, id_producto, id_deposito]
+        );
+
+        // 3. Registrar en Kardex
+        await connection.execute(
+            `INSERT INTO movimientos_inventario 
+            (id_producto, tipo_movimiento, cantidad, comentario, referencia_tabla) 
+            VALUES (?, ?, ?, ?, 'ajustes')`,
+            [id_producto, `AJUSTE_${tipo_ajuste}`, diferencia, motivo]
+        );
+
+        await connection.commit();
+        return { success: true };
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+// --- FUNCION 1: REPORTE X (Solo lectura) ---
+const obtenerReporteX = async (req, res) => {
+    try {
+        const [reporte] = await pool.query(`
+            SELECT 
+                IFNULL(SUM(v.total), 0) as ingresos_totales,
+                IFNULL(SUM(dv.cantidad * p.precio_costo), 0) as costo_total_mercancia,
+                (IFNULL(SUM(v.total), 0) - IFNULL(SUM(dv.cantidad * p.precio_costo), 0)) as ganancia_neta
+            FROM ventas v
+            JOIN detalle_ventas dv ON v.id = dv.id_venta
+            JOIN productos p ON dv.id_producto = p.id
+            WHERE v.estado_cierre = 'PENDIENTE' -- <--- Importante: solo lo no cerrado
+        `);
+
+        res.json({
+            success: true,
+            tipo: "REPORTE X",
+            mensaje: "Lectura parcial de ventas acumuladas.",
+            datos: reporte[0]
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
+// --- FUNCION 2: GENERAR CIERRE Z (Cierre definitivo) ---
+const generarCierreZ = async (req, res) => {
     let connection;
     try {
         connection = await pool.getConnection();
         await connection.beginTransaction();
 
-        const usuarioId = datosAjuste?.usuarioId || null;
-        const motivo = datosAjuste?.motivo || 'Ajuste manual';
-        const permitirStockNegativo = datosAjuste?.permitirStockNegativo || false;
-        const detalles = Array.isArray(datosAjuste?.detalles) ? datosAjuste.detalles : [];
+        // 1. Obtener los totales actuales de las ventas PENDIENTES
+        const [totales] = await connection.execute(`
+            SELECT 
+                IFNULL(SUM(v.total), 0) as ingresos_totales,
+                IFNULL(SUM(dv.cantidad * p.precio_costo), 0) as costo_total_mercancia
+            FROM ventas v
+            JOIN detalle_ventas dv ON v.id = dv.id_venta
+            JOIN productos p ON dv.id_producto = p.id
+            WHERE v.estado_cierre = 'PENDIENTE'
+            FOR UPDATE
+        `);
 
-        if (usuarioId) {
-            const [usuario] = await connection.execute('SELECT id FROM usuarios WHERE id = ?', [usuarioId]);
-            if (usuario.length === 0) {
-                const err = new Error(`Usuario con ID ${usuarioId} no existe.`);
-                err.status = 400;
-                throw err;
-            }
+        const ingresos = parseFloat(totales[0].ingresos_totales);
+        const costos = parseFloat(totales[0].costo_total_mercancia);
+        const utilidad = ingresos - costos;
+
+        // Si no hay ventas, podemos decidir si cerrar en 0 o dar un error
+        if (ingresos === 0) {
+            await connection.rollback();
+            return res.status(400).json({ success: false, error: "No hay ventas pendientes para realizar un cierre Z." });
         }
 
-        if (detalles.length === 0) {
-            const err = new Error('No se proporcionaron detalles de ajuste.');
-            err.status = 400;
-            throw err;
-        }
+        // 2. Guardar en el historial de cierres
+        // Usamos req.user.id (asegúrate que el middleware 'requiereAuth' esté funcionando)
+        await connection.execute(
+            `INSERT INTO cierres_diarios (ingresos_totales, costo_mercancia, utilidad_neta, usuario_id) 
+             VALUES (?, ?, ?, ?)`,
+            [ingresos, costos, utilidad, req.user.id]
+        );
 
-        for (const det of detalles) {
-            const productoId = det.productoId;
-            const id_deposito = det.id_deposito || 1;
-            const cantidadRaw = Number(det.cantidad);
-            if (!productoId || Number.isNaN(cantidadRaw)) {
-                const err = new Error('Detalle inválido: se requiere productId y cantidad numérica.');
-                err.status = 400;
-                throw err;
+        // 3. Marcar todas las ventas como cerradas
+        await connection.execute(`
+            UPDATE ventas 
+            SET estado_cierre = 'CERRADO' 
+            WHERE estado_cierre = 'PENDIENTE'
+        `);
+
+      const utilidadFormateada = parseFloat(utilidad.toFixed(2));
+
+        res.json({ 
+            success: true, 
+            mensaje: "Reporte Z generado con éxito. La caja ha sido cerrada.",
+            cierre: {
+                total_venta: ingresos,
+                ganancia: utilidadFormateada // <--- Usamos la variable formateada aquí
             }
+        });
 
-            const tipo = (det.tipo || (cantidadRaw >= 0 ? 'ENTRADA' : 'SALIDA')).toUpperCase();
-            const cantidad = Math.abs(cantidadRaw);
-
-            // Asegurarnos de que exista la fila de stock (bloqueada)
-            const [stockRows] = await connection.execute(
-                'SELECT cantidad FROM stock_depositos WHERE id_producto = ? AND id_deposito = ? FOR UPDATE',
-                [productoId, id_deposito]
-            );
-
-            if (stockRows.length === 0) {
-                await connection.execute(
-                    'INSERT INTO stock_depositos (id_producto, id_deposito, cantidad) VALUES (?, ?, ?)',
-                    [productoId, id_deposito, 0]
-                );
-            }
-
-            // Volver a leer el stock ahora que la fila existe y está bloqueada
-            const [stockAfterEnsure] = await connection.execute(
-                'SELECT cantidad FROM stock_depositos WHERE id_producto = ? AND id_deposito = ? FOR UPDATE',
-                [productoId, id_deposito]
-            );
-            let stockDisponible = stockAfterEnsure[0]?.cantidad || 0;
-
-            let movimientoCantidad;
-            if (tipo === 'SALIDA') {
-                movimientoCantidad = -cantidad;
-                if (!permitirStockNegativo && stockDisponible < cantidad) {
-                    const [prod] = await connection.execute('SELECT nombre FROM productos WHERE id = ?', [productoId]);
-                    const nombre = prod[0]?.nombre || `ID ${productoId}`;
-                    const err = new Error(
-                        `Stock insuficiente para "${nombre}". Disponible: ${stockDisponible}, Solicitado: ${cantidad}`
-                    );
-                    err.status = 400;
-                    throw err;
-                }
-
-                await connection.execute(
-                    'UPDATE stock_depositos SET cantidad = cantidad - ? WHERE id_producto = ? AND id_deposito = ?',
-                    [cantidad, productoId, id_deposito]
-                );
-            } else {
-                // ENTRADA
-                movimientoCantidad = cantidad;
-                await connection.execute(
-                    'UPDATE stock_depositos SET cantidad = cantidad + ? WHERE id_producto = ? AND id_deposito = ?',
-                    [cantidad, productoId, id_deposito]
-                );
-            }
-
-            const comentario = `Ajuste: ${motivo}. Usuario: ${usuarioId || 'sistema'}`;
-
-            await connection.execute(
-                `INSERT INTO movimientos_inventario (id_producto, id_deposito, tipo_movimiento, cantidad, referencia_id, referencia_tabla, comentario)
-                 VALUES (?, ?, 'AJUSTE', ?, NULL, 'ajustes', ?)`,
-                [productoId, id_deposito, movimientoCantidad, comentario]
-            );
-        }
-
-        await connection.commit();
-        return { success: true, detallesProcesados: detalles.length };
     } catch (error) {
         if (connection) await connection.rollback();
-        throw error;
+        res.status(500).json({ success: false, error: error.message });
     } finally {
         if (connection) connection.release();
     }
+};
+// --- FUNCION: OBTENER HISTORIAL DE CIERRES ---
+async function obtenerHistorialCierres() {
+    const [rows] = await pool.execute(`
+        SELECT 
+            c.id, 
+            c.fecha_cierre, 
+            c.ingresos_totales, 
+            c.costo_mercancia, 
+            c.utilidad_neta, 
+            u.nombre as gerente
+        FROM cierres_diarios c
+        JOIN usuarios u ON c.usuario_id = u.id
+        ORDER BY c.fecha_cierre DESC
+    `);
+    return rows;
 }
-async function trasladarMercancia(datos) { /* ... */ }
-async function obtenerValoracionInventario() { /* ... */ }
+// --- NUEVO: REPORTE PARA INVENTARIO MANUAL (TOMA FÍSICA) ---
+async function obtenerReporteTomaFisica(idCategoria = null) {
+    let query = `
+        SELECT p.id, p.codigo, p.nombre as producto, sd.cantidad as stock_sistema, '' as conteo_real
+        FROM productos p
+        JOIN stock_depositos sd ON p.id = sd.id_producto
+        WHERE sd.id_deposito = 1
+    `;
+    const params = [];
+    if (idCategoria) {
+        query += ` AND p.id_categoria = ?`;
+        params.push(idCategoria);
+    }
+    const [rows] = await pool.execute(query, params);
+    return rows;
+}
+
+// --- NUEVO: DATOS PARA GRÁFICO ---
+async function obtenerVentasMensuales() {
+    const [rows] = await pool.execute(`
+        SELECT DATE_FORMAT(fecha_venta, '%Y-%m') as mes, SUM(total) as total_ventas
+        FROM ventas
+        WHERE fecha_venta >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+        GROUP BY mes ORDER BY mes ASC
+    `);
+    return rows;
+}
+async function trasladarMercancia(idProducto, idOrigen, idDestino, cantidad, comentario = 'Traslado interno') {
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        // 1. Restar del origen
+        const [restar] = await connection.execute(
+            'UPDATE stock_depositos SET cantidad = cantidad - ? WHERE id_producto = ? AND id_deposito = ?',
+            [cantidad, idProducto, idOrigen]
+        );
+
+        // 2. Sumar al destino
+        const [sumar] = await connection.execute(
+            'UPDATE stock_depositos SET cantidad = cantidad + ? WHERE id_producto = ? AND id_deposito = ?',
+            [cantidad, idProducto, idDestino]
+        );
+
+        // 3. Registrar el movimiento en el historial (Kardex)
+        await connection.execute(
+            `INSERT INTO movimientos_inventario 
+            (id_producto, tipo_movimiento, cantidad, comentario, referencia_tabla) 
+            VALUES (?, 'TRASLADO', ?, ?, 'stock_depositos')`,
+            [idProducto, 0, `${comentario}: Movidas ${cantidad} unidades del depósito ${idOrigen} al ${idDestino}`]
+        );
+
+        await connection.commit();
+        return true;
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+async function actualizarProducto(id, datos) {
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        // Validar que el código no lo tenga OTRO producto diferente al que estamos editando
+        const [existe] = await connection.execute(
+            'SELECT id FROM productos WHERE codigo = ? AND id != ?', 
+            [datos.codigo, id]
+        );
+
+        if (existe.length > 0) {
+            throw new Error(`El código ${datos.codigo} ya está siendo usado por otro producto.`);
+        }
+
+        const [res] = await connection.execute(
+            `UPDATE productos 
+             SET codigo = ?, nombre = ?, precio_venta = ?, precio_costo = ? 
+             WHERE id = ?`,
+            [datos.codigo, datos.nombre, datos.precio_venta, datos.precio_costo, id]
+        );
+
+        await connection.commit();
+        return res.affectedRows > 0;
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+async function eliminarProducto(id) {
+    // Primero verificamos si tiene movimientos para no romper la integridad
+    const [movimientos] = await pool.execute(
+        'SELECT id FROM movimientos_inventario WHERE id_producto = ? LIMIT 1', 
+        [id]
+    );
+
+    if (movimientos.length > 0) {
+        // Si tiene movimientos, solo lo desactivamos
+        const [res] = await pool.execute('UPDATE productos SET estado = "INACTIVO" WHERE id = ?', [id]);
+        return { success: true, message: "Producto desactivado (tenía historial)." };
+    } else {
+        // Si es nuevo y no tiene nada, se puede borrar
+        await pool.execute('DELETE FROM stock_depositos WHERE id_producto = ?', [id]);
+        await pool.execute('DELETE FROM productos WHERE id = ?', [id]);
+        return { success: true, message: "Producto eliminado definitivamente." };
+    }
+}
+async function procesarDevolucion(datosDevolucion) {
+    const { id_venta, id_producto, cantidad, motivo, usuario_id } = datosDevolucion;
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        // 1. Verificar que la venta y el producto existan en el detalle
+        const [detalle] = await connection.execute(
+            'SELECT cantidad, precio_unitario FROM detalle_ventas WHERE id_venta = ? AND id_producto = ?',
+            [id_venta, id_producto]
+        );
+
+        if (detalle.length === 0) {
+            throw new Error("El producto no pertenece a la venta especificada.");
+        }
+
+        if (cantidad > detalle[0].cantidad) {
+            throw new Error("La cantidad a devolver supera la cantidad vendida.");
+        }
+
+        // 2. Aumentar el stock en el depósito principal (id_deposito = 1)
+        await connection.execute(
+            'UPDATE stock_depositos SET cantidad = cantidad + ? WHERE id_producto = ? AND id_deposito = 1',
+            [cantidad, id_producto]
+        );
+
+        // 3. Registrar el movimiento en el Kardex
+        const comentario = `Devolución Venta #${id_venta}. Motivo: ${motivo}`;
+        await connection.execute(
+            `INSERT INTO movimientos_inventario (id_producto, id_deposito, tipo_movimiento, cantidad, referencia_id, referencia_tabla, comentario)
+             VALUES (?, 1, 'DEVOLUCION_CLIENTE', ?, ?, 'ventas', ?)`,
+            [id_producto, cantidad, id_venta, comentario]
+        );
+
+        // 4. (Opcional) Aquí podrías insertar una lógica para registrar el saldo a favor del cliente
+
+        await connection.commit();
+        return { success: true, mensaje: "Devolución procesada correctamente" };
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+async function obtenerStockPorDepositos() {
+    const [rows] = await pool.execute(`
+        SELECT 
+            p.id, 
+            p.codigo, 
+            p.nombre as producto,
+            SUM(CASE WHEN sd.id_deposito = 1 THEN sd.cantidad ELSE 0 END) as principal,
+            SUM(CASE WHEN sd.id_deposito = 2 THEN sd.cantidad ELSE 0 END) as danado,
+            SUM(CASE WHEN sd.id_deposito = 3 THEN sd.cantidad ELSE 0 END) as inmovilizado,
+            SUM(sd.cantidad) as stock_total
+        FROM productos p
+        LEFT JOIN stock_depositos sd ON p.id = sd.id_producto
+        GROUP BY p.id
+    `);
+    return rows;
+}
+async function obtenerValoracionInventario() {
+    const [rows] = await pool.execute(`
+        SELECT 
+            c.nombre as categoria,
+            COUNT(p.id) as cantidad_productos,
+            SUM(sd.cantidad) as unidades_totales,
+            SUM(sd.cantidad * p.precio_costo) as inversion_total_costo,
+            SUM(sd.cantidad * p.precio_venta) as valor_potencial_venta
+        FROM productos p
+        INNER JOIN categorias c ON p.id_categoria = c.id
+        INNER JOIN stock_depositos sd ON p.id = sd.id_producto
+        WHERE sd.id_deposito = 1 -- Valoramos solo lo que está para la venta
+        GROUP BY c.id
+        ORDER BY inversion_total_costo DESC
+    `);
+    return rows;
+}
 
 module.exports = { 
     procesarNuevaVenta, procesarNuevaCompra, obtenerProductoPorId,
     obtenerTodosLosProductos, crearProducto, procesarDevolucion,
     obtenerStockPorDepositos, actualizarProducto, procesarAjusteInventario, 
     trasladarMercancia, obtenerValoracionInventario, obtenerStockCritico,
-    obtenerGananciasHoy, obtenerVentasPorVendedor, registrarUsuario, obtenerUsuarios, 
+    obtenerGananciasTienda, obtenerVentasPorVendedor, registrarUsuario, obtenerUsuarios, 
     actualizarUsuario, eliminarUsuario, obtenerLoMasVendido, loginUsuario,
-    obtenerKardexProducto
-
+    obtenerKardexProducto, generarCierreZ, obtenerReporteX, obtenerHistorialCierres,
+    obtenerReporteTomaFisica, obtenerVentasMensuales, obtenerProductosMasVendidos,
+    obtenerVentasPorMetodoPago, obtenerInventarioCritico
 };

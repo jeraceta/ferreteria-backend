@@ -1,5 +1,6 @@
 {
     "recommendations": [
-        "formulahendry.vscode-mysql"
+        "formulahendry.vscode-mysql",
+        "codeium.codeium"
     ]
 }

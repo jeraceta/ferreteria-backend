@@ -122,3 +122,4 @@ if (!comando || comando === 'help') {
     console.log(`❌ Comando "${comando}" no encontrado. Usa "help" para ver comandos disponibles.`);
 }
 
+
